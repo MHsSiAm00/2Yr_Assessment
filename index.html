@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BRTA Assessment Form Generator</title>
+    <link rel="manifest" href="manifest.json">
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('sw.js').catch(() => {});
+        });
+      }
+    </script>
+    <!-- jsPDF only — no html2canvas, no html2pdf -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
+    <style>
+        :root { --primary: #2563eb; --bg: #f3f4f6; }
+        * { box-sizing: border-box; }
+        body { font-family: Arial, sans-serif; background: var(--bg); margin: 0; padding: 20px; }
+        .container { max-width: 700px; margin: 0 auto; background: white; padding: 24px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        h2 { margin-top: 0; color: #1e3a5f; }
+
+        .tabs { display: flex; gap: 10px; margin-bottom: 20px; border-bottom: 2px solid #e5e7eb; padding-bottom: 10px; }
+        .tab-btn { padding: 10px 20px; cursor: pointer; border: none; background: #e5e7eb; border-radius: 4px; font-weight: bold; color: #333; }
+        .tab-btn.active { background: var(--primary); color: white; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+
+        .pair-container { border: 1px solid #d1d5db; padding: 14px; margin-bottom: 12px; border-radius: 6px; background: #f9fafb; position: relative; padding-top: 40px; }
+        .pair-container label { display: block; margin-bottom: 8px; font-weight: 600; font-size: 14px; color: #374151; }
+        .pair-container input { padding: 8px 10px; width: 100%; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; margin-top: 4px; }
+        .remove-btn { position: absolute; top: 10px; right: 10px; background: #ef4444; color: white; border: none; border-radius: 4px; padding: 5px 10px; cursor: pointer; font-size: 12px; }
+        .remove-btn:hover { background: #dc2626; }
+        .btn { padding: 10px 18px; background: var(--primary); color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: 600; }
+        .btn:hover { background: #1d4ed8; }
+        .btn-green { background: #10b981; font-size: 16px; }
+        .btn-green:hover { background: #059669; }
+
+        .edit-table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+        .edit-table th, .edit-table td { border: 1px solid #d1d5db; padding: 10px; text-align: left; font-size: 14px; }
+        .edit-table th { background: #f3f4f6; }
+        .edit-table input { width: 130px; padding: 6px; border: 1px solid #999; border-radius: 3px; font-size: 14px; }
+        #save-msg { color: #10b981; display: none; margin-top: 10px; font-weight: 600; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h2>🇧🇩 BRTA Assessment Form Generator</h2>
+
+    <div class="tabs">
+        <button class="tab-btn active" onclick="switchTab('new', event)">New Assessment</button>
+        <button class="tab-btn" onclick="switchTab('edit', event)">Edit Fee Amounts</button>
+    </div>
+
+    <div id="new" class="tab-content active">
+        <p style="color:#555;font-size:14px;">Add one entry per vehicle. Each becomes one A4 page.</p>
+        <div id="dynamic-inputs"></div>
+        <button class="btn" onclick="addPair()" style="margin-bottom:20px;">+ Add Vehicle</button>
+        <hr style="margin: 20px 0; border-color:#e5e7eb;">
+        <button class="btn btn-green" onclick="generatePDF()">⬇ Download PDF</button>
+    </div>
+
+    <div id="edit" class="tab-content">
+        <h3 style="margin-top:0;">Edit Fee Amounts</h3>
+        <table class="edit-table">
+            <thead><tr><th>Fee Item</th><th>Amount (৳)</th></tr></thead>
+            <tbody id="edit-tbody"></tbody>
+        </table>
+        <button class="btn" onclick="saveFees()">Save Amounts</button>
+        <p id="save-msg">✅ Amounts saved!</p>
+    </div>
+</div>
+
+<script>
+const { jsPDF } = window.jspdf;
+
+const defaultFees = {
+    newRegMan: 3000, newRegIns: 450,
+    taxTokenMan: 2000,
+    cfAppFee: 818, dnp: 2260,
+    drc: 555, supDutyMan: 1069
+};
+let currentFees = JSON.parse(localStorage.getItem('brtaFees')) || { ...defaultFees };
+
+const fmt = n => n ? Number(n).toLocaleString('en-US') : '';
+
+function switchTab(id, e) {
+    document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab-btn').forEach(t => t.classList.remove('active'));
+    document.getElementById(id).classList.add('active');
+    e.target.classList.add('active');
+}
+
+function addPair() {
+    const c = document.getElementById('dynamic-inputs');
+    const d = document.createElement('div');
+    d.className = 'pair-container';
+    d.innerHTML = `
+        <button class="remove-btn" onclick="this.parentElement.remove()">✕ Remove</button>
+        <label>Engine No.<input type="text" class="engine-input" placeholder="e.g. Pwb546"></label>
+        <label style="margin-top:10px;">Chassis No.<input type="text" class="chassis-input" placeholder="e.g. Psub566poi"></label>
+    `;
+    c.appendChild(d);
+}
+
+function renderEditTable() {
+    document.getElementById('edit-tbody').innerHTML = `
+        <tr><td>New Registration – Man Fee</td><td><input type="number" id="f-newRegMan" value="${currentFees.newRegMan}"></td></tr>
+        <tr><td>New Registration – Inspecting Fee</td><td><input type="number" id="f-newRegIns" value="${currentFees.newRegIns}"></td></tr>
+        <tr><td>Tax Token – Man Fee</td><td><input type="number" id="f-taxTokenMan" value="${currentFees.taxTokenMan}"></td></tr>
+        <tr><td>Certificate of Fitness Total</td><td><input type="number" id="f-cfAppFee" value="${currentFees.cfAppFee}"></td></tr>
+        <tr><td>DNP Total</td><td><input type="number" id="f-dnp" value="${currentFees.dnp}"></td></tr>
+        <tr><td>DRC Total</td><td><input type="number" id="f-drc" value="${currentFees.drc}"></td></tr>
+        <tr><td>Supplementary Duty – Man Fee</td><td><input type="number" id="f-supDutyMan" value="${currentFees.supDutyMan}"></td></tr>
+    `;
+}
+
+function saveFees() {
+    ['newRegMan','newRegIns','taxTokenMan','cfAppFee','dnp','drc','supDutyMan'].forEach(k => {
+        currentFees[k] = Number(document.getElementById('f-' + k).value);
+    });
+    localStorage.setItem('brtaFees', JSON.stringify(currentFees));
+    const m = document.getElementById('save-msg');
+    m.style.display = 'block';
+    setTimeout(() => m.style.display = 'none', 3000);
+}
+
+/* ═══════════════════════════════════════════
+   PDF GENERATION — pure jsPDF vector drawing
+   No html2canvas, no DOM capture, no clipping
+═══════════════════════════════════════════ */
+function generatePDF() {
+    const engines = [...document.querySelectorAll('.engine-input')];
+    const chassis = [...document.querySelectorAll('.chassis-input')];
+    if (!engines.length) { alert('Please add at least one vehicle.'); return; }
+
+    const f = currentFees;
+    const newRegTotal   = f.newRegMan + f.newRegIns;
+    const taxTokenTotal = f.taxTokenMan;
+    const supDutyTotal  = f.supDutyMan;
+    const grandTotal    = newRegTotal + taxTokenTotal + f.cfAppFee + f.dnp + f.drc + supDutyTotal;
+
+    // A4 = 210 × 297 mm
+    const doc = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
+    const PW = 210;
+    const ML = 13, MR = 13;          // left/right margin
+    const CW = PW - ML - MR;         // content width = 184 mm
+
+    // Column widths for the 9-column table (sum must equal CW)
+    // [SI, Particulars, Man, Inspecting, Label, Application, Late, Other, Total]
+    const rawCols = [10, 60, 18, 18, 16, 20, 16, 16, 20];
+    const rawSum  = rawCols.reduce((a,b)=>a+b,0);
+    const cw      = rawCols.map(c => c / rawSum * CW);
+
+    // X position of column i
+    const cx = i => { let x = ML; for(let k=0;k<i;k++) x+=cw[k]; return x; };
+
+    engines.forEach((engEl, idx) => {
+        if (idx > 0) doc.addPage();
+
+        const eng  = engEl.value        || '';
+        const chas = chassis[idx].value || '';
+        let y = 10;
+
+        // ── HEADER ──────────────────────────────────
+        const hLines = [
+            'Government of the peoples Republic of Bangladesh',
+            'Bangladesh Road Transport Authority',
+            'Allenbury, Tejgaon, Dhaka-1215',
+            '(Assessment Form)'
+        ];
+        doc.setFont('times','bold');
+        doc.setFontSize(12);
+        hLines.forEach(l => { doc.text(l, PW/2, y, {align:'center'}); y += 5.5; });
+        y += 2;
+
+        // MOB=
+        doc.setFont('times','normal');
+        doc.setFontSize(10);
+        doc.text('MOB=', PW - MR, y, {align:'right'});
+        y += 6;
+
+        // ── INFO LEFT COLUMN ─────────────────────────
+        const col2X = ML + CW * 0.50;
+
+        function leftRow(label, value, bold) {
+            doc.setFont('times','normal');
+            doc.setFontSize(10);
+            doc.text(label, ML, y);
+            if (value) {
+                doc.setFont('times', bold ? 'bold' : 'normal');
+                doc.text(value, ML + 40, y);
+            }
+        }
+
+        leftRow('Name of circle/Zone', 'SIRAJGANJ'); y += 4.5;
+        leftRow('District', '');                      y += 4.5;
+        leftRow('Branch Name', '');                   y += 6;
+
+        // "Vehicle Information" bold + underline
+        doc.setFont('times','bold');
+        doc.setFontSize(10);
+        doc.text('Vehicle Information', ML, y);
+        doc.line(ML, y+0.6, ML + doc.getTextWidth('Vehicle Information'), y+0.6);
+        doc.setFont('times','normal');
+        y += 4.5;
+
+        leftRow('Registration No.', '');               y += 4.5;
+        leftRow('Chassis No.',      chas, true);       y += 4.5;
+        leftRow('Engine No.',       eng,  true);       y += 4.5;
+        leftRow('Vehicle Type.',    'MOTORCYCLE');     y += 6;
+
+        // ── INFO RIGHT COLUMN ─────────────────────────
+        // Positioned alongside the Vehicle Info block
+        const rightStart = 10 + 4*5.5 + 2 + 6 + 6 + 6; // matches y when VI block started
+        const rLabels = [
+            'Owner Name.',
+            'Father Name & Address.',
+            'Owner Type.',
+            'Seating Capacity/Weight .',
+            'Depositor Name & Address.'
+        ];
+        doc.setFont('times','normal');
+        doc.setFontSize(10);
+        rLabels.forEach((l, li) => {
+            doc.text(l, col2X, rightStart + li * 4.5);
+        });
+
+        // ── TABLE ────────────────────────────────────
+        const RH = 5.5; // default row height mm
+        doc.setFontSize(8);
+
+        // Draw a bordered cell with wrapped text
+        function drawCell(x, cy, w, h, text, opts={}) {
+            doc.setDrawColor(0);
+            doc.setLineWidth(0.2);
+            doc.rect(x, cy, w, h);
+            if (!text && text !== 0) return;
+            const str = String(text);
+            const pad = 1.2;
+            const maxW = w - pad*2;
+            doc.setFont('times', opts.bold ? 'bold' : 'normal');
+            doc.setFontSize(opts.small ? 7.5 : 8);
+            const wrapped = doc.splitTextToSize(str, maxW);
+            const lineH = 3.4;
+            const totalTH = wrapped.length * lineH;
+            // vertical center
+            const startY = cy + (h - totalTH) / 2 + 2.5;
+            if ((opts.align||'center') === 'center') {
+                wrapped.forEach((l,li) => doc.text(l, x+w/2, startY + li*lineH, {align:'center'}));
+            } else {
+                doc.text(wrapped, x + pad, startY);
+            }
+        }
+
+        // Header row
+        const headers = ['SI\nNo.','Fee Particulars','Man\nFee','Inspecting\nFee','Label\nFee','Application\nFee','Late\nFee','Other\nFee','Total\nFee'];
+        const hH = RH * 2.2;
+        headers.forEach((h,ci) => drawCell(cx(ci), y, cw[ci], hH, h, {bold:true}));
+        y += hH;
+
+        // Shorthand for a full 9-col row
+        function fullRow(vals, h, siSpan) {
+            // vals[0] = SI cell — pass null to skip (for rowspan simulation)
+            if (vals[0] !== null) drawCell(cx(0), y, cw[0], h, vals[0]);
+            for (let ci=1; ci<9; ci++) {
+                const v = vals[ci];
+                const bold = ci===8 && v && String(v).startsWith('=');
+                drawCell(cx(ci), y, cw[ci], h, v===undefined?'':v,
+                    {align: ci===1?'left':'center', bold, small: ci===1});
+            }
+            y += h;
+        }
+
+        // Row 1
+        fullRow(['1','a) New Registration\nb) Conversion of Registration',
+            fmt(f.newRegMan),fmt(f.newRegIns),'','','','',fmt(newRegTotal)], RH*2.2);
+
+        // Row 2
+        fullRow(['2','Transfer of Ownership (T.O)','','','','','','',''], RH);
+
+        // Row 3
+        fullRow(['3','a) Issue of Tax Token 2 Years\nb) Renewal of Tax Token',
+            fmt(f.taxTokenMan),'','','','','',fmt(taxTokenTotal)], RH*2.2);
+
+        // Row 4 — rowspan 2 on SI
+        const r4y = y;
+        fullRow([null,'a) Issue of Certificate of Fitness (C.F)\nb) Renewal Certificate of Fitness',
+            '','','','15%','','',fmt(f.cfAppFee)], RH*2.2);
+        fullRow([null,'DNP','','','','','','',fmt(f.dnp)], RH);
+        drawCell(cx(0), r4y, cw[0], y - r4y, '4');
+
+        // Row 5 — rowspan 3 on SI
+        const r5y = y;
+        fullRow([null,'a) Issue of route permit (R.P) contact\n(carriage/private temporary of permanent)',
+            '','','','','','',''], RH*2.5);
+        fullRow([null,'DRC','','','','','','',fmt(f.drc)], RH);
+        fullRow([null,'Supplementary Duty',fmt(f.supDutyMan),'','','','','',fmt(supDutyTotal)], RH);
+        drawCell(cx(0), r5y, cw[0], y - r5y, '5');
+
+        // Row 6
+        fullRow(['6',
+            'a) Issue of driving License (D.L) Professional/Non-Professional\n'+
+            'b) Renewal of Driving License Professional/Non-professional\n'+
+            'c) Issue/Renewal of Learner License\n'+
+            'd) Registration of Driving school\n'+
+            'f) Issue of Instructor License\ng) Other',
+            '','','','','','','='+fmt(grandTotal)+'/-'], RH*5.5);
+
+        // Row 7
+        fullRow(['7',
+            'Miscellaneous\na) Engine Change\nb) Color/Address Change\nc) Endorsement\n'+
+            'd) Any Correction (Spicily)\ne) i) Issue of New Trade Certificate (Garage Number)\n'+
+            '   ii) Renewal of Trade Certificate (Garage Number)\n'+
+            'f) Issue of Duplicate Registration Certificate/Duplicate D.L/\n'+
+            '   Duplicate C.F/Duplicate R.P/Duplicate Tax Token\n'+
+            'g) Others (Khat Name .........................)',
+            '','','','','','',''], RH*7);
+    });
+
+    doc.save('BRTA_Assessment_Form.pdf');
+}
+
+// Init
+addPair();
+renderEditTable();
+</script>
+</body>
+</html>
